@@ -3,6 +3,19 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=1480" />
+  <script>
+    // Early viewport swap: phones (screen.width < 768) get device-width so the
+    // mobile build renders at native size. Tablets and desktops keep width=1480
+    // so the desktop layout renders at full resolution.
+    (function () {
+      try {
+        if (window.screen && window.screen.width < 768) {
+          var m = document.querySelector('meta[name="viewport"]');
+          if (m) m.setAttribute('content', 'width=device-width, initial-scale=1, viewport-fit=cover');
+        }
+      } catch (e) {}
+    })();
+  </script>
   <title>Student Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -39547,7 +39560,835 @@ window.TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 })();
 
 
-ReactDOM.createRoot(document.getElementById("root")).render(<window.AppShell />);
+
+// ──── students/mobile/mobile-app.jsx (auto-routed for narrow viewports) ────
+;(function(){
+// Mobile student dashboard — Direction 2 (brand-forward), functional.
+// Real-data version. Reads from window.ELECTIVES.
+// Phase mapping (terminology): MS3 → Phase 2, MS4 → Phase 3. (Phase 1 = pre-clerkship, no electives.)
+
+const { useState: useStateMA, useMemo: useMemoMA, useEffect: useEffectMA, useRef: useRefMA } = React;
+
+// ─── Brand ────────────────────────────────────────────────────
+const BRAND = {
+  cyan:        "#00AEEF",
+  cyanDeep:    "#0086B5",
+  cyanTint:    "#E5F6FE",
+  magenta:     "#D80B8C",
+  magentaDeep: "#A8086C",
+  magentaTint: "#FCE7F1",
+  violet:      "#221F72",
+  violetTint:  "#E8E7F3",
+  ink:         "#0e1a2a",
+  ink2:        "#36404a",
+  grey11:      "#58595B",
+  grey8:       "#8a9099",
+  grey3:       "#d4dae1",
+  grey2:       "#e8ecf1",
+  grey1:       "#f4f6f9",
+  bg:          "#F8F9FB",
+  paper:       "#ffffff",
+};
+
+const SPECIALTY_COLOR = {
+  "Anesthesiology": "#00AEEF",
+  "Surgery": "#D80B8C",
+  "Psychiatry": "#221F72",
+  "Radiology": "#7E57C2",
+  "Neurology": "#0288A8",
+  "Pediatrics": "#EF6C00",
+  "Emergency Medicine": "#C62828",
+  "Emergency Med": "#C62828",
+  "Obstetrics and Gynecology": "#AD1457",
+  "OB/GYN": "#AD1457",
+  "Internal Medicine": "#1565C0",
+  "Family Medicine": "#2E7D32",
+  "Dermatology": "#6A1B9A",
+  "Ophthalmology": "#00838F",
+  "Otolaryngology": "#5D4037",
+  "Orthopedics": "#37474F",
+  "Orthopedic Surgery": "#37474F",
+  "Pathology": "#455A64",
+  "Radiation Oncology": "#558B2F",
+  "Urology": "#1976D2",
+  "Neurosurgery": "#4527A0",
+  "Plastic Surgery": "#C2185B",
+  "Physical Medicine and Rehabilitation": "#00695C",
+  "PM&R": "#00695C",
+};
+const specColor = (s) => SPECIALTY_COLOR[s] || "#58595B";
+
+// Year display: dual-label "M3/Phase 2" + "M4/Phase 3" during the
+// transition from old MS terminology to the triphasic curriculum names.
+function yearToPhases(s) {
+  if (!s) return "—";
+  const has3 = /MS3/.test(s);
+  const has4 = /MS4/.test(s);
+  const has1or2 = /MS1|MS2/.test(s);
+  const parts = [];
+  if (has1or2) parts.push("Phase 1");
+  if (has3) parts.push("M3/Phase 2");
+  if (has4) parts.push("M4/Phase 3");
+  if (!parts.length) return s;
+  return parts.join(" · ");
+}
+// Compact form for tight pills.
+function yearToPhasesShort(s) {
+  if (!s) return "—";
+  const parts = [];
+  if (/MS1|MS2/.test(s)) parts.push("P1");
+  if (/MS3/.test(s)) parts.push("M3/P2");
+  if (/MS4/.test(s)) parts.push("M4/P3");
+  if (!parts.length) return s;
+  return parts.join(" · ");
+}
+function eligibleForPhase(yearStr, phase) {
+  // phase: "all" | "2" | "3"
+  if (phase === "all") return true;
+  if (phase === "2") return /MS3/.test(yearStr || "");
+  if (phase === "3") return /MS4/.test(yearStr || "");
+  return true;
+}
+
+// ─── Icons ────────────────────────────────────────────────────
+const Ico = ({ d, size = 22, stroke = "currentColor", fill = "none", sw = 1.8 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke={stroke} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">{d}</svg>
+);
+const IconSearch  = (p) => <Ico {...p} d={<><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></>} />;
+const IconFilter  = (p) => <Ico {...p} d={<><path d="M3 6h18M6 12h12M10 18h4"/></>} />;
+const IconBookmark= (p) => <Ico {...p} d={<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>} />;
+const IconBookmarkF= (p) => <Ico {...p} d={<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>} fill="currentColor" sw={1.2}/>;
+const IconCal     = (p) => <Ico {...p} d={<><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></>} />;
+const IconHome    = (p) => <Ico {...p} d={<><path d="M3 11l9-8 9 8"/><path d="M5 9v12h14V9"/></>} />;
+const IconUser    = (p) => <Ico {...p} d={<><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-7 8-7s8 3 8 7"/></>} />;
+const IconMap     = (p) => <Ico {...p} d={<><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></>} />;
+const IconChevR   = (p) => <Ico {...p} d={<path d="m9 6 6 6-6 6"/>} />;
+const IconChevD   = (p) => <Ico {...p} d={<path d="m6 9 6 6 6-6"/>} />;
+const IconBack    = (p) => <Ico {...p} d={<path d="m15 18-6-6 6-6"/>} />;
+const IconClose   = (p) => <Ico {...p} d={<path d="M18 6 6 18M6 6l12 12"/>} />;
+const IconSort    = (p) => <Ico {...p} d={<><path d="M3 6h18M6 12h12M9 18h6"/></>} />;
+const IconShare   = (p) => <Ico {...p} d={<><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/></>} />;
+const IconCheck   = (p) => <Ico {...p} d={<path d="M4 12l5 5L20 6"/>} />;
+const IconBook    = (p) => <Ico {...p} d={<><path d="M4 4v16a2 2 0 0 0 2 2h14V4H6a2 2 0 0 0-2 2v0"/><path d="M9 8h6M9 12h6"/></>} />;
+const IconRefresh = (p) => <Ico {...p} d={<><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></>} />;
+
+// ─── Storage helpers ──────────────────────────────────────────
+const SAVED_KEY = "ascend_mobile_saved_v1";
+function loadSaved() {
+  try { return new Set(JSON.parse(localStorage.getItem(SAVED_KEY) || "[]")); }
+  catch { return new Set(); }
+}
+function persistSaved(set) {
+  try { localStorage.setItem(SAVED_KEY, JSON.stringify([...set])); } catch {}
+}
+
+// ─── Tiny shared bits ─────────────────────────────────────────
+function Tag({ children, color, dark }) {
+  const c = color || BRAND.grey11;
+  if (dark) return <div style={{ background: "rgba(255,255,255,0.18)", color: "#fff", padding: "3px 9px", borderRadius: 6, fontSize: 12, fontWeight: 600 }}>{children}</div>;
+  return <div style={{ background: c + "1A", color: c, padding: "3px 9px", borderRadius: 6, fontSize: 12, fontWeight: 600 }}>{children}</div>;
+}
+
+function Segmented({ value, onChange, options }) {
+  return (
+    <div style={{ display: "flex", background: BRAND.grey1, borderRadius: 9, padding: 3, height: 36 }}>
+      {options.map(([val, label]) => {
+        const on = val === value;
+        return (
+          <div key={val} onClick={() => onChange(val)}
+               style={{ flex: 1, display: "grid", placeItems: "center", borderRadius: 6, background: on ? "#fff" : "transparent", boxShadow: on ? "0 1px 3px rgba(0,0,0,.10), 0 1px 1px rgba(0,0,0,.04)" : "none", fontSize: 13, fontWeight: on ? 600 : 500, color: on ? BRAND.ink : BRAND.grey11, cursor: "pointer", transition: "background .15s" }}>
+            {label}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Tab bar ──────────────────────────────────────────────────
+function MobileTabBar({ active, onChange, savedCount }) {
+  const items = [
+    { id: "electives", label: "Electives", icon: IconBook },
+    { id: "sessions",  label: "Sessions",  icon: IconCal },
+    { id: "saved",     label: "Saved",     icon: IconBookmark, badge: savedCount },
+    { id: "me",        label: "Me",        icon: IconUser },
+  ];
+  return (
+    <div style={{ background: "#fff", borderTop: "1px solid " + BRAND.grey2, paddingBottom: "max(env(safe-area-inset-bottom, 18px), 18px)" }}>
+      <div style={{ display: "flex", padding: "8px 4px 4px" }}>
+        {items.map((it) => {
+          const on = it.id === active;
+          return (
+            <button key={it.id} onClick={() => onChange(it.id)}
+                    style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "4px 0", border: "none", background: "transparent", cursor: "pointer", position: "relative" }}>
+              <div style={{ background: on ? BRAND.cyanTint : "transparent", padding: "4px 18px", borderRadius: 999, position: "relative" }}>
+                <it.icon size={22} stroke={on ? BRAND.cyan : BRAND.grey11} sw={on ? 2.2 : 1.8}/>
+                {it.badge ? (
+                  <div style={{ position: "absolute", top: -2, right: 8, background: BRAND.magenta, color: "#fff", borderRadius: 999, minWidth: 16, height: 16, padding: "0 4px", fontSize: 10, fontWeight: 700, display: "grid", placeItems: "center", border: "2px solid #fff" }}>{it.badge}</div>
+                ) : null}
+              </div>
+              <div style={{ fontSize: 11, color: on ? BRAND.cyan : BRAND.grey11, fontWeight: on ? 600 : 500 }}>{it.label}</div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Electives list ───────────────────────────────────────────
+function ElectivesList({ onOpen, onOpenFilters, savedSet, onToggleSave }) {
+  const all = window.ELECTIVES || [];
+  const [q, setQ] = useStateMA("");
+  const [phase, setPhase] = useStateMA("all"); // 'all' | '2' | '3'
+  const [sortBy, setSortBy] = useStateMA("relevance");
+  const [filters, setFilters] = useStateMA({
+    specialty: "All", type: "All", duration: "All", setting: "All",
+    intensity: "All", audition: "All", site: "All",
+  });
+
+  // Bridge for filter sheet → list state
+  useEffectMA(() => { window.__mobileFilters = { filters, setFilters }; }, [filters]);
+
+  const activeFilterCount = Object.values(filters).filter((v) => v !== "All").length;
+
+  const filtered = useMemoMA(() => {
+    const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const inSplit = (val, target, split) => {
+      if (target === "All") return true;
+      if (!val) return false;
+      if (split) return val.split(split).map((x) => x.trim()).includes(target);
+      return val === target;
+    };
+    let list = all.filter((e) => {
+      if (!eligibleForPhase(e.yearEligibility, phase)) return false;
+      if (tokens.length) {
+        const hay = [e.code, e.title, e.specialty, e.type, e.keywords, e.residencyTracks, e.sites, e.clinicalSetting, e.intensity].join(" ").toLowerCase();
+        if (!tokens.every((t) => hay.includes(t))) return false;
+      }
+      if (!inSplit(e.specialty, filters.specialty)) return false;
+      if (!inSplit(e.type, filters.type)) return false;
+      if (!inSplit(e.clinicalSetting, filters.setting)) return false;
+      if (!inSplit(e.intensity, filters.intensity)) return false;
+      if (!inSplit(e.audition, filters.audition)) return false;
+      if (!inSplit(e.sites, filters.site, ";")) return false;
+      if (filters.duration !== "All") {
+        const wantWeeks = parseInt(filters.duration);
+        const has = (e.durationOptions || "").split(",").map((p) => parseInt(p.trim())).filter((n) => !isNaN(n));
+        if (!has.includes(wantWeeks)) return false;
+      }
+      return true;
+    });
+    if (sortBy === "title") list = [...list].sort((a, b) => a.title.localeCompare(b.title));
+    else if (sortBy === "code") list = [...list].sort((a, b) => a.code.localeCompare(b.code));
+    else if (sortBy === "specialty") list = [...list].sort((a, b) => (a.specialty || "").localeCompare(b.specialty || "") || a.title.localeCompare(b.title));
+    return list;
+  }, [all, q, phase, filters, sortBy]);
+
+  function clearAll() {
+    setQ(""); setPhase("all");
+    setFilters({ specialty: "All", type: "All", duration: "All", setting: "All", intensity: "All", audition: "All", site: "All" });
+  }
+
+  const sans = "'Inter Tight', system-ui, sans-serif";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: BRAND.bg, fontFamily: sans, color: BRAND.ink, overflow: "hidden" }}>
+      {/* Cyan app bar */}
+      <div style={{ background: BRAND.cyan, color: "#fff", paddingTop: "max(env(safe-area-inset-top, 12px), 12px)", paddingBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px 12px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 10, height: 10, borderRadius: 2, background: "#fff" }}/>
+            <div style={{ fontSize: 19, fontWeight: 600, letterSpacing: -0.2 }}>Electives</div>
+          </div>
+          <button onClick={() => alert("Profile (stub)")} style={{ width: 36, height: 36, borderRadius: 999, background: "rgba(255,255,255,0.18)", border: "none", color: "#fff", display: "grid", placeItems: "center", cursor: "pointer" }}>
+            <IconUser size={20} stroke="#fff" sw={2}/>
+          </button>
+        </div>
+        {/* Search */}
+        <div style={{ padding: "0 14px" }}>
+          <div style={{ background: "rgba(255,255,255,0.97)", borderRadius: 12, padding: "11px 14px", display: "flex", alignItems: "center", gap: 10, boxShadow: "0 1px 6px rgba(0,0,0,0.05)" }}>
+            <IconSearch size={18} stroke={BRAND.grey11} sw={2}/>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search electives, code, track" autoCorrect="off" autoCapitalize="off"
+              style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: 15, fontFamily: sans, color: BRAND.ink, minWidth: 0 }}/>
+            {q ? (
+              <button onClick={() => setQ("")} style={{ background: "transparent", border: "none", padding: 0, color: BRAND.grey11, cursor: "pointer", display: "grid", placeItems: "center" }}>
+                <IconClose size={16} stroke={BRAND.grey11} sw={2}/>
+              </button>
+            ) : null}
+            <div style={{ width: 1, height: 18, background: BRAND.grey2 }}/>
+            <button onClick={onOpenFilters} style={{ background: "transparent", border: "none", padding: 0, color: BRAND.cyan, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, position: "relative" }}>
+              <IconFilter size={18} stroke={BRAND.cyan} sw={2.2}/>
+              {activeFilterCount > 0 && <div style={{ position: "absolute", top: -4, right: -8, background: BRAND.magenta, color: "#fff", borderRadius: 999, minWidth: 16, height: 16, padding: "0 4px", fontSize: 10, fontWeight: 700, display: "grid", placeItems: "center", border: "2px solid #fff" }}>{activeFilterCount}</div>}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Phase segmented control */}
+      <div style={{ padding: "10px 14px 6px", background: "#fff", borderBottom: "1px solid " + BRAND.grey2 }}>
+        <Segmented value={phase} onChange={setPhase} options={[["all", "All"], ["2", "M3 · P2"], ["3", "M4 · P3"]]}/>
+      </div>
+
+      {/* Filter chip ribbon */}
+      <FilterChips filters={filters} setFilters={setFilters} onOpenFilters={onOpenFilters}/>
+
+      {/* Active filter chips (removable) */}
+      {(activeFilterCount > 0 || q) && (
+        <div style={{ background: "#fff", borderBottom: "1px solid " + BRAND.grey2, padding: "6px 14px 10px", display: "flex", gap: 6, overflowX: "auto", flexWrap: "wrap" }}>
+          {q && <RemovableChip label={`"${q}"`} onRemove={() => setQ("")}/>}
+          {Object.entries(filters).map(([k, v]) => v !== "All" && <RemovableChip key={k} label={v} onRemove={() => setFilters({ ...filters, [k]: "All" })}/>)}
+          {(activeFilterCount + (q ? 1 : 0)) > 1 && (
+            <button onClick={clearAll} style={{ marginLeft: "auto", background: "transparent", border: "none", color: BRAND.magenta, fontSize: 12, fontWeight: 600, cursor: "pointer", padding: "3px 6px" }}>Clear all</button>
+          )}
+        </div>
+      )}
+
+      {/* Result count + sort */}
+      <div style={{ padding: "12px 16px 6px", display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <div style={{ fontSize: 13, color: BRAND.grey11 }}>
+          <span style={{ color: BRAND.ink, fontWeight: 600 }}>{filtered.length} result{filtered.length === 1 ? "" : "s"}</span>
+          {(activeFilterCount > 0 || phase !== "all") && <span> · filtered</span>}
+        </div>
+        <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}
+          style={{ fontSize: 12, padding: "4px 8px", border: "1px solid " + BRAND.grey2, borderRadius: 7, background: "#fff", color: BRAND.ink2, fontFamily: sans, appearance: "none", paddingRight: 24, backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2358595B' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")", backgroundRepeat: "no-repeat", backgroundPosition: "right 7px center" }}>
+          <option value="relevance">Sort: catalog</option>
+          <option value="title">Sort: title A–Z</option>
+          <option value="code">Sort: code</option>
+          <option value="specialty">Sort: specialty</option>
+        </select>
+      </div>
+
+      {/* Results */}
+      <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "4px 14px 14px", WebkitOverflowScrolling: "touch" }}>
+        {filtered.length === 0 ? (
+          <div style={{ background: "#fff", borderRadius: 12, padding: "44px 20px", textAlign: "center", color: BRAND.grey11, fontSize: 14, marginTop: 8 }}>
+            <div style={{ marginBottom: 6, fontWeight: 600, color: BRAND.ink }}>No electives match.</div>
+            Try removing filters, or{" "}
+            <button onClick={clearAll} style={{ background: "transparent", border: "none", color: BRAND.cyan, fontWeight: 600, cursor: "pointer", padding: 0, fontSize: 14 }}>clear all</button>.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingBottom: 16 }}>
+            {filtered.map((e) => (
+              <ElectiveCard key={e.code} e={e} onOpen={() => onOpen(e.code)} saved={savedSet.has(e.code)} onToggleSave={() => onToggleSave(e.code)}/>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FilterChips({ filters, setFilters, onOpenFilters }) {
+  // Quick toggles for the most common filters; tapping opens the full sheet for that facet.
+  const chips = [
+    { key: "specialty", label: filters.specialty === "All" ? "Specialty" : filters.specialty, dropdown: true },
+    { key: "duration",  label: filters.duration  === "All" ? "Duration"  : filters.duration,  dropdown: true },
+    { key: "audition",  label: filters.audition  === "Yes" ? "Audition"  : (filters.audition === "All" ? "Audition" : "Non-audition"), dropdown: true, toggled: filters.audition !== "All" },
+    { key: "site",      label: filters.site      === "All" ? "Site"      : filters.site,      dropdown: true },
+    { key: "setting",   label: filters.setting   === "All" ? "Setting"   : filters.setting,   dropdown: true },
+  ];
+  return (
+    <div style={{ background: "#fff", borderBottom: "1px solid " + BRAND.grey2, padding: "10px 0", display: "flex", gap: 7, overflowX: "auto", overflowY: "hidden", paddingLeft: 14, paddingRight: 14, scrollbarWidth: "none", whiteSpace: "nowrap" }}>
+      {chips.map((c) => {
+        const on = filters[c.key] !== "All";
+        return (
+          <button key={c.key} onClick={onOpenFilters}
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 999, whiteSpace: "nowrap",
+                     background: on ? BRAND.magenta : "#fff",
+                     color: on ? "#fff" : BRAND.ink,
+                     border: on ? "1px solid " + BRAND.magenta : "1px solid " + BRAND.grey3,
+                     fontSize: 13, fontWeight: 500, cursor: "pointer", flexShrink: 0 }}>
+            {c.label}
+            {c.dropdown && <IconChevD size={11} stroke={on ? "#fff" : BRAND.ink} sw={2.6}/>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function RemovableChip({ label, onRemove }) {
+  return (
+    <button onClick={onRemove}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5, background: BRAND.cyanTint, color: BRAND.cyanDeep, border: "none", padding: "4px 8px 4px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}>
+      {label}<IconClose size={10} stroke={BRAND.cyanDeep} sw={3}/>
+    </button>
+  );
+}
+
+function ElectiveCard({ e, onOpen, saved, onToggleSave }) {
+  const c = specColor(e.specialty);
+  return (
+    <div onClick={onOpen}
+      style={{ background: "#fff", borderRadius: 12, boxShadow: "0 1px 2px rgba(0,0,0,0.05), 0 4px 12px rgba(0,0,0,0.04)", display: "flex", overflow: "hidden", cursor: "pointer", WebkitTapHighlightColor: "rgba(0,0,0,0.06)" }}>
+      <div style={{ width: 5, background: c, flex: "0 0 5px" }}/>
+      <div style={{ flex: 1, padding: "12px 14px", minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+          <div style={{ fontFamily: "'JetBrains Mono', ui-monospace, monospace", fontSize: 11, color: c, fontWeight: 700, letterSpacing: 0.3 }}>{e.code}</div>
+          <button onClick={(ev) => { ev.stopPropagation(); onToggleSave(); }} style={{ background: "transparent", border: "none", padding: 4, margin: -4, cursor: "pointer", color: saved ? BRAND.magenta : BRAND.grey3, display: "grid", placeItems: "center" }}>
+            {saved ? <IconBookmarkF size={18}/> : <IconBookmark size={18} sw={2}/>}
+          </button>
+        </div>
+        <div style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.25, marginBottom: 8, color: BRAND.ink }}>{e.title}</div>
+        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+          <Tag color={c}>{e.specialty}</Tag>
+          <Tag>{(e.durationOptions || "").replace(/\s/g, "")} wk</Tag>
+          <Tag>{yearToPhasesShort(e.yearEligibility)}</Tag>
+          {e.audition === "Yes" && <Tag color={BRAND.magenta}>Audition</Tag>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Elective detail ──────────────────────────────────────────
+function ElectiveDetail({ code, onBack, saved, onToggleSave }) {
+  const all = window.ELECTIVES || [];
+  const e = all.find((x) => x.code === code);
+  if (!e) {
+    return (
+      <div style={{ padding: 40, textAlign: "center", color: BRAND.grey11, fontFamily: "'Inter Tight', system-ui" }}>
+        <div style={{ marginBottom: 12 }}>Elective not found.</div>
+        <button onClick={onBack} style={{ background: BRAND.cyan, color: "#fff", border: "none", padding: "10px 20px", borderRadius: 8, fontSize: 14, fontWeight: 600 }}>Back</button>
+      </div>
+    );
+  }
+  const c = specColor(e.specialty);
+  const sans = "'Inter Tight', system-ui, sans-serif";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: BRAND.bg, fontFamily: sans, color: BRAND.ink, overflow: "hidden" }}>
+      {/* Banner */}
+      <div style={{ background: c, color: "#fff", paddingTop: "max(env(safe-area-inset-top, 12px), 12px)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 18px" }}>
+          <button onClick={onBack} style={{ width: 36, height: 36, borderRadius: 999, background: "rgba(255,255,255,0.18)", border: "none", color: "#fff", display: "grid", placeItems: "center", cursor: "pointer" }}>
+            <IconBack size={20} stroke="#fff" sw={2.2}/>
+          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onToggleSave} style={{ width: 36, height: 36, borderRadius: 999, background: "rgba(255,255,255,0.18)", border: "none", color: "#fff", display: "grid", placeItems: "center", cursor: "pointer" }}>
+              {saved ? <IconBookmarkF size={18}/> : <IconBookmark size={18} sw={2}/>}
+            </button>
+            <button onClick={() => { try { navigator.share && navigator.share({ title: e.title, text: e.code + " — " + e.title }); } catch {} }}
+                    style={{ width: 36, height: 36, borderRadius: 999, background: "rgba(255,255,255,0.18)", border: "none", color: "#fff", display: "grid", placeItems: "center", cursor: "pointer" }}>
+              <IconShare size={18} stroke="#fff" sw={2}/>
+            </button>
+          </div>
+        </div>
+        <div style={{ padding: "0 18px 22px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', ui-monospace, monospace", fontSize: 13, opacity: 0.9, letterSpacing: 0.4, marginBottom: 6 }}>{e.code}</div>
+          <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: -0.4, lineHeight: 1.15 }}>{e.title}</div>
+          <div style={{ display: "flex", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
+            <Tag dark>{e.specialty}</Tag>
+            <Tag dark>{e.type}</Tag>
+            {e.audition === "Yes" && <Tag dark>Audition eligible</Tag>}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", padding: "16px 14px 18px", marginTop: -14, background: BRAND.bg, borderTopLeftRadius: 18, borderTopRightRadius: 18, WebkitOverflowScrolling: "touch" }}>
+        {/* Quick stats */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
+          <StatTile label="Duration" value={(e.durationOptions || "—") + " wk"}/>
+          <StatTile label="Eligible" value={yearToPhasesShort(e.yearEligibility)}/>
+          <StatTile label="Setting" value={e.clinicalSetting || "—"} small/>
+        </div>
+
+        <InfoBlock label="Eligibility & duration">
+          <Row k="Year eligibility" v={yearToPhases(e.yearEligibility)}/>
+          <Row k="Duration options" v={(e.durationOptions || "—") + " weeks"}/>
+          <Row k="Intensity" v={e.intensity || "—"}/>
+        </InfoBlock>
+
+        <InfoBlock label="Site & setting">
+          <Row k="Site(s)" v={e.sites || "—"}/>
+          <Row k="Clinical setting" v={e.clinicalSetting || "—"}/>
+          <Row k="Audition" v={e.audition === "Yes" ? "Audition-eligible" : "Not audition"} accent={e.audition === "Yes" ? BRAND.magenta : null}/>
+        </InfoBlock>
+
+        {e.residencyTracks && (
+          <InfoBlock label="Residency tracks">
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "10px 0 0" }}>
+              {e.residencyTracks.split(";").map((t) => t.trim()).filter(Boolean).map((t) => (
+                <div key={t} style={{ fontSize: 12, border: "1px solid " + BRAND.grey2, padding: "5px 10px", borderRadius: 999, color: BRAND.ink2, fontWeight: 500 }}>{t}</div>
+              ))}
+            </div>
+          </InfoBlock>
+        )}
+
+        {e.keywords && (
+          <InfoBlock label="Keywords">
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, padding: "10px 0 0" }}>
+              {e.keywords.split(";").map((k) => k.trim()).filter(Boolean).map((k) => (
+                <div key={k} style={{ fontSize: 11.5, padding: "3px 8px", background: BRAND.grey1, color: BRAND.ink2, borderRadius: 6, fontWeight: 500 }}>{k}</div>
+              ))}
+            </div>
+          </InfoBlock>
+        )}
+
+        {e.erasCategory && (
+          <InfoBlock label="ERAS category">
+            <div style={{ fontSize: 14, padding: "10px 0 0", color: BRAND.ink2 }}>{e.erasCategory}</div>
+          </InfoBlock>
+        )}
+
+        <div style={{ marginTop: 6, padding: "12px 0 4px", fontSize: 12, color: BRAND.grey11, textAlign: "center" }}>
+          From the ASCEND Electives Catalog — AY 2026–27
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatTile({ label, value, small }) {
+  return (
+    <div style={{ background: "#fff", borderRadius: 10, padding: "10px 11px", minHeight: 56 }}>
+      <div style={{ fontSize: 10, color: BRAND.grey11, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: small ? 12 : 14, fontWeight: 600, color: BRAND.ink, lineHeight: 1.2 }}>{value}</div>
+    </div>
+  );
+}
+function InfoBlock({ label, children }) {
+  return (
+    <div style={{ background: "#fff", borderRadius: 12, padding: "14px 16px 16px", marginBottom: 10 }}>
+      <div style={{ fontSize: 11, color: BRAND.grey11, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, marginBottom: 6 }}>{label}</div>
+      {children}
+    </div>
+  );
+}
+function Row({ k, v, accent }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid " + BRAND.grey2, fontSize: 13.5, alignItems: "baseline" }}>
+      <div style={{ color: BRAND.grey11 }}>{k}</div>
+      <div style={{ color: accent || BRAND.ink, fontWeight: accent ? 700 : 500, textAlign: "right", maxWidth: "62%" }}>{v}</div>
+    </div>
+  );
+}
+
+// ─── Filter sheet ─────────────────────────────────────────────
+function FilterSheet({ open, onClose }) {
+  const all = window.ELECTIVES || [];
+  const { filters, setFilters } = window.__mobileFilters || { filters: {}, setFilters: () => {} };
+  const [local, setLocal] = useStateMA(filters);
+  useEffectMA(() => { if (open) setLocal(filters); }, [open, filters]);
+
+  const facets = useMemoMA(() => {
+    const f = (key, split = null) => {
+      const set = new Set();
+      for (const e of all) {
+        const v = e[key]; if (!v) continue;
+        if (split) v.split(split).forEach((p) => { const t = p.trim(); if (t) set.add(t); });
+        else set.add(v);
+      }
+      return [...set].sort();
+    };
+    return {
+      specialties: f("specialty"),
+      types:       f("type"),
+      settings:    f("clinicalSetting"),
+      intensities: f("intensity"),
+      auditions:   f("audition"),
+      sites:       f("sites", ";"),
+      durations:   (() => {
+        const set = new Set();
+        for (const e of all) (e.durationOptions || "").split(",").forEach((p) => { const t = p.trim(); if (t) set.add(t); });
+        return [...set].sort((a, b) => parseInt(a) - parseInt(b)).map((d) => `${d} weeks`);
+      })(),
+    };
+  }, [all]);
+
+  if (!open) return null;
+  const sans = "'Inter Tight', system-ui, sans-serif";
+
+  function apply() { setFilters(local); onClose(); }
+  function reset() { const r = { specialty: "All", type: "All", duration: "All", setting: "All", intensity: "All", audition: "All", site: "All" }; setLocal(r); }
+
+  const sections = [
+    { key: "specialty", label: "Specialty",        opts: ["All", ...facets.specialties] },
+    { key: "duration",  label: "Duration",         opts: ["All", ...facets.durations] },
+    { key: "site",      label: "Site",             opts: ["All", ...facets.sites] },
+    { key: "setting",   label: "Clinical setting", opts: ["All", ...facets.settings] },
+    { key: "intensity", label: "Intensity",        opts: ["All", ...facets.intensities] },
+    { key: "audition",  label: "Audition",         opts: ["All", ...facets.auditions] },
+    { key: "type",      label: "Type",             opts: ["All", ...facets.types] },
+  ];
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(14,26,42,0.55)", zIndex: 100, display: "flex", flexDirection: "column", justifyContent: "flex-end", fontFamily: sans }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: "#fff", borderTopLeftRadius: 18, borderTopRightRadius: 18, height: "92%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        {/* Drag handle */}
+        <div style={{ display: "grid", placeItems: "center", padding: "8px 0 4px" }}>
+          <div style={{ width: 36, height: 4, background: BRAND.grey3, borderRadius: 999 }}/>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 18px 14px", borderBottom: "1px solid " + BRAND.grey2 }}>
+          <button onClick={reset} style={{ background: "transparent", border: "none", color: BRAND.grey11, fontSize: 14, fontWeight: 500, cursor: "pointer" }}>Reset</button>
+          <div style={{ fontSize: 17, fontWeight: 600 }}>Filters</div>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: BRAND.cyan, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "10px 14px 14px", WebkitOverflowScrolling: "touch" }}>
+          {sections.map((s) => (
+            <FilterGroup key={s.key} label={s.label} value={local[s.key] || "All"} options={s.opts} onChange={(v) => setLocal({ ...local, [s.key]: v })}/>
+          ))}
+        </div>
+        <div style={{ padding: "12px 14px", borderTop: "1px solid " + BRAND.grey2, paddingBottom: "max(env(safe-area-inset-bottom, 16px), 16px)" }}>
+          <button onClick={apply} style={{ width: "100%", background: BRAND.magenta, color: "#fff", border: "none", padding: "14px 20px", borderRadius: 12, fontSize: 16, fontWeight: 600, cursor: "pointer", boxShadow: "0 4px 14px rgba(216,11,140,0.30)" }}>Apply filters</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FilterGroup({ label, value, options, onChange }) {
+  const [open, setOpen] = useStateMA(value !== "All");
+  return (
+    <div style={{ marginBottom: 10, background: BRAND.grey1, borderRadius: 12, overflow: "hidden" }}>
+      <button onClick={() => setOpen((o) => !o)}
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: "transparent", border: "none", width: "100%", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: BRAND.ink }}>{label}</div>
+          <div style={{ fontSize: 12, color: value === "All" ? BRAND.grey11 : BRAND.magenta, marginTop: 2, fontWeight: value === "All" ? 500 : 600 }}>{value === "All" ? "Any" : value}</div>
+        </div>
+        <IconChevD size={16} stroke={BRAND.grey11} sw={2} style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }}/>
+      </button>
+      {open && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 12px 12px" }}>
+          {options.map((o) => {
+            const on = o === value;
+            return (
+              <button key={o} onClick={() => onChange(o)}
+                style={{ background: on ? BRAND.magenta : "#fff", color: on ? "#fff" : BRAND.ink, border: on ? "1px solid " + BRAND.magenta : "1px solid " + BRAND.grey2, padding: "6px 12px", borderRadius: 999, fontSize: 12.5, fontWeight: 500, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                {on && <IconCheck size={11} stroke="#fff" sw={3}/>}
+                {o}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Saved tab ────────────────────────────────────────────────
+function SavedList({ savedSet, onOpen, onToggleSave, onGoBrowse }) {
+  const all = window.ELECTIVES || [];
+  const saved = all.filter((e) => savedSet.has(e.code));
+  const sans = "'Inter Tight', system-ui, sans-serif";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: BRAND.bg, fontFamily: sans, color: BRAND.ink, overflow: "hidden" }}>
+      <div style={{ background: BRAND.cyan, color: "#fff", paddingTop: "max(env(safe-area-inset-top, 12px), 12px)", paddingBottom: 18 }}>
+        <div style={{ padding: "10px 16px 4px", display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 10, height: 10, borderRadius: 2, background: "#fff" }}/>
+          <div style={{ fontSize: 19, fontWeight: 600, letterSpacing: -0.2 }}>Saved</div>
+        </div>
+        <div style={{ padding: "0 16px", fontSize: 13, opacity: 0.9, marginTop: 4 }}>{saved.length} elective{saved.length === 1 ? "" : "s"} bookmarked</div>
+      </div>
+      <div style={{ flex: 1, overflowY: "auto", padding: "12px 14px 14px" }}>
+        {saved.length === 0 ? (
+          <div style={{ background: "#fff", borderRadius: 12, padding: "44px 24px", textAlign: "center", color: BRAND.grey11, marginTop: 12 }}>
+            <div style={{ display: "grid", placeItems: "center", marginBottom: 10, color: BRAND.grey3 }}>
+              <IconBookmark size={36} stroke={BRAND.grey3} sw={1.5}/>
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: BRAND.ink, marginBottom: 4 }}>No saved electives yet</div>
+            <div style={{ fontSize: 13, marginBottom: 14 }}>Tap the bookmark on any elective to add it here.</div>
+            <button onClick={onGoBrowse} style={{ background: BRAND.cyan, color: "#fff", border: "none", padding: "10px 18px", borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Browse catalog</button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingBottom: 16 }}>
+            {saved.map((e) => (
+              <ElectiveCard key={e.code} e={e} onOpen={() => onOpen(e.code)} saved={true} onToggleSave={() => onToggleSave(e.code)}/>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Sessions stub ────────────────────────────────────────────
+function SessionsStub() {
+  const sans = "'Inter Tight', system-ui, sans-serif";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: BRAND.bg, fontFamily: sans, color: BRAND.ink, overflow: "hidden" }}>
+      <div style={{ background: BRAND.cyan, color: "#fff", paddingTop: "max(env(safe-area-inset-top, 12px), 12px)", paddingBottom: 18 }}>
+        <div style={{ padding: "10px 16px 4px", display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 10, height: 10, borderRadius: 2, background: "#fff" }}/>
+          <div style={{ fontSize: 19, fontWeight: 600, letterSpacing: -0.2 }}>Sessions</div>
+        </div>
+        <div style={{ padding: "0 16px", fontSize: 13, opacity: 0.9, marginTop: 4 }}>Modules, sessions, MEPO trace</div>
+      </div>
+      <div style={{ flex: 1, padding: "40px 24px", textAlign: "center", color: BRAND.grey11, overflow: "auto" }}>
+        <div style={{ display: "grid", placeItems: "center", marginBottom: 14, color: BRAND.grey3 }}>
+          <IconCal size={44} stroke={BRAND.grey3} sw={1.5}/>
+        </div>
+        <div style={{ fontSize: 16, fontWeight: 600, color: BRAND.ink, marginBottom: 8 }}>Best viewed on desktop</div>
+        <div style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 280, margin: "0 auto" }}>
+          The session map and MEPO trace are dense and work better on a larger screen. Open this dashboard on a laptop to dig in.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Me stub ──────────────────────────────────────────────────
+function MeStub({ savedCount }) {
+  const sans = "'Inter Tight', system-ui, sans-serif";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: BRAND.bg, fontFamily: sans, color: BRAND.ink, overflow: "hidden" }}>
+      <div style={{ background: BRAND.cyan, color: "#fff", paddingTop: "max(env(safe-area-inset-top, 12px), 12px)", paddingBottom: 22 }}>
+        <div style={{ padding: "10px 16px 4px", display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 10, height: 10, borderRadius: 2, background: "#fff" }}/>
+          <div style={{ fontSize: 19, fontWeight: 600, letterSpacing: -0.2 }}>Profile</div>
+        </div>
+      </div>
+      <div style={{ flex: 1, overflowY: "auto", padding: "16px 14px" }}>
+        <div style={{ background: "#fff", borderRadius: 12, padding: 18, display: "flex", alignItems: "center", gap: 14, marginBottom: 12 }}>
+          <div style={{ width: 56, height: 56, borderRadius: 999, background: BRAND.violet, color: "#fff", display: "grid", placeItems: "center", fontSize: 22, fontWeight: 700 }}>JC</div>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 600 }}>Jordan Castillo</div>
+            <div style={{ fontSize: 13, color: BRAND.grey11, marginTop: 2 }}>M4 / Phase 3 · Class of 2027</div>
+          </div>
+        </div>
+        <div style={{ background: "#fff", borderRadius: 12, overflow: "hidden" }}>
+          {[
+            ["Saved electives", String(savedCount)],
+            ["Curriculum phase", "M4 / Phase 3"],
+            ["Cohort", "Class of 2027"],
+            ["Notifications", "On"],
+            ["About ASCEND", ""],
+          ].map(([k, v], i, arr) => (
+            <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderBottom: i < arr.length - 1 ? "0.5px solid " + BRAND.grey2 : "none" }}>
+              <span style={{ fontSize: 15 }}>{k}</span>
+              <span style={{ fontSize: 14, color: BRAND.grey11, display: "flex", alignItems: "center", gap: 6 }}>{v}<IconChevR size={14} stroke={BRAND.grey3} sw={2}/></span>
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize: 11, color: BRAND.grey11, textAlign: "center", marginTop: 18 }}>ASCEND · v1.0 · Mobile preview</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Pull-to-refresh wrapper ──────────────────────────────────
+function PullToRefresh({ onRefresh, children }) {
+  const [pull, setPull] = useStateMA(0);
+  const [refreshing, setRefreshing] = useStateMA(false);
+  const startY = useRefMA(0);
+  const wrapRef = useRefMA(null);
+
+  function onTouchStart(e) {
+    if (wrapRef.current && wrapRef.current.scrollTop <= 0) startY.current = e.touches[0].clientY;
+    else startY.current = -1;
+  }
+  function onTouchMove(e) {
+    if (startY.current < 0) return;
+    const dy = e.touches[0].clientY - startY.current;
+    if (dy > 0) setPull(Math.min(dy * 0.5, 90));
+  }
+  function onTouchEnd() {
+    if (pull > 60 && !refreshing) {
+      setRefreshing(true);
+      Promise.resolve(onRefresh && onRefresh()).then(() => { setTimeout(() => { setRefreshing(false); setPull(0); }, 400); });
+    } else setPull(0);
+    startY.current = -1;
+  }
+  return (
+    <div ref={wrapRef} onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
+         style={{ height: "100%", overflow: "hidden", position: "relative" }}>
+      <div style={{ position: "absolute", top: pull - 30, left: 0, right: 0, display: "grid", placeItems: "center", height: 30, color: BRAND.cyan, transition: refreshing ? "none" : "top .2s" }}>
+        <IconRefresh size={20} stroke={BRAND.cyan} sw={2.2} style={{ transform: `rotate(${pull * 4}deg)`, transition: refreshing ? "transform .8s linear infinite" : "none" }}/>
+      </div>
+      <div style={{ height: "100%", transform: `translateY(${pull}px)`, transition: refreshing ? "none" : "transform .2s" }}>{children}</div>
+    </div>
+  );
+}
+
+// ─── Root mobile app ──────────────────────────────────────────
+function MobileApp() {
+  const [tab, setTab] = useStateMA("electives");
+  const [detailCode, setDetailCode] = useStateMA(null);
+  const [filtersOpen, setFiltersOpen] = useStateMA(false);
+  const [savedSet, setSavedSet] = useStateMA(loadSaved());
+  const [refreshNonce, setRefreshNonce] = useStateMA(0);
+
+  function toggleSave(code) {
+    setSavedSet((prev) => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code); else next.add(code);
+      persistSaved(next);
+      return next;
+    });
+  }
+
+  // Body content
+  let body;
+  if (detailCode) {
+    body = <ElectiveDetail code={detailCode} onBack={() => setDetailCode(null)} saved={savedSet.has(detailCode)} onToggleSave={() => toggleSave(detailCode)}/>;
+  } else if (tab === "electives") {
+    body = (
+      <PullToRefresh key={refreshNonce} onRefresh={() => setRefreshNonce((n) => n + 1)}>
+        <ElectivesList onOpen={(code) => setDetailCode(code)} onOpenFilters={() => setFiltersOpen(true)} savedSet={savedSet} onToggleSave={toggleSave}/>
+      </PullToRefresh>
+    );
+  } else if (tab === "sessions") {
+    body = <SessionsStub/>;
+  } else if (tab === "saved") {
+    body = <SavedList savedSet={savedSet} onOpen={(code) => setDetailCode(code)} onToggleSave={toggleSave} onGoBrowse={() => setTab("electives")}/>;
+  } else if (tab === "me") {
+    body = <MeStub savedCount={savedSet.size}/>;
+  }
+
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: BRAND.bg, overflow: "hidden" }}>
+      <div style={{ flex: 1, minHeight: 0, position: "relative" }}>{body}</div>
+      {!detailCode && <MobileTabBar active={tab} onChange={setTab} savedCount={savedSet.size}/>}
+      <FilterSheet open={filtersOpen} onClose={() => setFiltersOpen(false)}/>
+    </div>
+  );
+}
+
+window.MobileApp = MobileApp;
+
+})();
+
+// Auto-detect router. < 768 px viewport → mobile. Override with ?view=mobile / ?view=desktop.
+function StudentsRouter() {
+  const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const override = params && params.get("view");
+  const getIsMobile = () => {
+    if (override === "mobile")  return true;
+    if (override === "desktop") return false;
+    return typeof window !== "undefined" && window.innerWidth < 768;
+  };
+  const [isMobile, setIsMobile] = React.useState(getIsMobile);
+  React.useEffect(() => {
+    if (override) return; // honor override, no resize watcher
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  React.useEffect(() => {
+    // Mobile build wants overscroll lock + dark backdrop behind the phone frame on tablets.
+    // Desktop build expects the original paper background.
+    const body = document.body;
+    if (isMobile) {
+      body.style.margin = "0";
+      body.style.padding = "0";
+      body.style.background = "#F8F9FB";
+      body.style.overscrollBehavior = "none";
+      body.style.fontFamily = "'Inter Tight', system-ui, sans-serif";
+    } else {
+      body.style.margin = "";
+      body.style.padding = "";
+      body.style.background = "";
+      body.style.overscrollBehavior = "";
+      body.style.fontFamily = "";
+    }
+  }, [isMobile]);
+  return isMobile ? <window.MobileApp /> : <window.AppShell />;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<StudentsRouter />);
+
   </script>
 </body>
 </html>
